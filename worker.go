@@ -168,8 +168,6 @@ func (self *lbWorker) Run(fn func([]interface{}, map[string]interface{}) []inter
 		if len(request) == 0 {
 			break
 		}
-		// You should code your logic here
-		// var instances []map[string]interface{}
 		var instances []interface{}
 		if err := json.Unmarshal(request[0], &instances); err != nil {
 			log.Fatalln("Bad message: invalid instances")
