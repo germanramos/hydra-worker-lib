@@ -161,7 +161,6 @@ func (self *lbWorker) recv(reply [][]byte) (msg [][]byte) {
 	return
 }
 
-// func (self *lbWorker) Run(fn func([]map[string]interface{}, map[string]string) []interface{}) {
 func (self *lbWorker) Run(fn func([]interface{}, map[string]interface{}) []interface{}) {
 	for reply := [][]byte{}; ; {
 		request := self.recv(reply)
@@ -184,16 +183,18 @@ func (self *lbWorker) Run(fn func([]interface{}, map[string]interface{}) []inter
 		processInstances = func(levels []interface{}, ci *[]interface{}, iteration int) []interface{} {
 			levelIteration := 0
 			for _, level := range levels {
-				kind := reflect.TypeOf(level).Kind()
-				if kind == reflect.Slice || kind == reflect.Array {
-					o := make([]interface{}, 0)
-					*ci = append(*ci, processInstances(level.([]interface{}), &o, levelIteration))
-				} else {
-					args["iteration"] = iteration
-					t := fn(levels, args)
-					return t
+				if level != nil {
+					kind := reflect.TypeOf(level).Kind()
+					if kind == reflect.Slice || kind == reflect.Array {
+						o := make([]interface{}, 0)
+						*ci = append(*ci, processInstances(level.([]interface{}), &o, levelIteration))
+					} else {
+						args["iteration"] = iteration
+						t := fn(levels, args)
+						return t
+					}
+					levelIteration = levelIteration + 1
 				}
-				levelIteration = levelIteration + 1
 			}
 			return *ci
 		}
