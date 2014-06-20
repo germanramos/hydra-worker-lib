@@ -27,11 +27,12 @@ type Worker interface {
 }
 
 type lbWorker struct {
-	broker  string // Hydra Load Balancer address
-	context *zmq.Context
-	service string
-	verbose bool
-	worker  *zmq.Socket
+	broker        string // Hydra Load Balancer address
+	context       *zmq.Context
+	priorityLevel int
+	service       string
+	verbose       bool
+	worker        *zmq.Socket
 
 	heartbeat   time.Duration
 	heartbeatAt time.Time
@@ -42,16 +43,17 @@ type lbWorker struct {
 	replyTo     []byte
 }
 
-func NewWorker(broker, service string, verbose bool) Worker {
+func NewWorker(broker, service string, priorityLevel int, verbose bool) Worker {
 	context, _ := zmq.NewContext()
 	self := &lbWorker{
-		broker:    broker,
-		context:   context,
-		service:   service,
-		verbose:   verbose,
-		heartbeat: 2500 * time.Millisecond,
-		liveness:  0,
-		reconnect: 2500 * time.Millisecond,
+		broker:        broker,
+		context:       context,
+		priorityLevel: priorityLevel,
+		service:       service,
+		verbose:       verbose,
+		heartbeat:     2500 * time.Millisecond,
+		liveness:      0,
+		reconnect:     2500 * time.Millisecond,
 	}
 	self.reconnectToBroker()
 	return self
@@ -68,7 +70,7 @@ func (self *lbWorker) reconnectToBroker() {
 	if self.verbose {
 		log.Printf("Connecting to broker at %s...\n", self.broker)
 	}
-	self.sendToBroker(SIGNAL_READY, []byte(self.service), nil)
+	self.sendToBroker(SIGNAL_READY, []byte(self.service, self.priorityLevel), nil)
 	self.liveness = HEARTBEAT_LIVENESS
 	self.heartbeatAt = time.Now().Add(self.heartbeat)
 }
