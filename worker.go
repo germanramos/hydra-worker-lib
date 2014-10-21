@@ -256,7 +256,7 @@ func (self *lbWorker) recv(reply [][]byte) (msg [][]byte) {
 }
 
 // Run executes the worker permanently
-func (self *lbWorker) Run(fn func([]interface{}, map[string]interface{}) []interface{}) {
+func (self *lbWorker) Run(fn func([]interface{}, map[string][]string, map[string]interface{}) []interface{}) {
 	for reply := [][]byte{}; ; {
 		request := self.recv(reply)
 		if len(request) == 0 {
@@ -268,8 +268,14 @@ func (self *lbWorker) Run(fn func([]interface{}, map[string]interface{}) []inter
 			// TODO: Set REPLY and return
 		}
 
+		var clientParams map[string][]string
+		if err := json.Unmarshal(request[1], &clientParams); err != nil {
+			log.Fatalln("Bad message: invalid client params")
+			// TODO: Set REPLY and return
+		}
+
 		var args map[string]interface{}
-		if err := json.Unmarshal(request[1], &args); err != nil {
+		if err := json.Unmarshal(request[2], &args); err != nil {
 			log.Fatalln("Bad message: invalid args")
 			// TODO: Set REPLY and return
 		}
@@ -285,7 +291,7 @@ func (self *lbWorker) Run(fn func([]interface{}, map[string]interface{}) []inter
 						*ci = append(*ci, processInstances(level.([]interface{}), &o, levelIteration))
 					} else {
 						args["iteration"] = iteration
-						t := fn(levels, args)
+						t := fn(levels, clientParams, args)
 						return t
 					}
 					levelIteration = levelIteration + 1
