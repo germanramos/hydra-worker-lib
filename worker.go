@@ -34,7 +34,7 @@ const (
 type Worker interface {
 	close()
 	recv([][]byte) [][]byte
-	Run(func([]interface{}, map[string]interface{}) []interface{})
+	Run(func([]interface{}, map[string][]string, map[string]interface{}) []interface{})
 }
 
 type lbWorker struct {
