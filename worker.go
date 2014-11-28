@@ -2,6 +2,7 @@ package worker
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"io/ioutil"
 	"log"
@@ -32,11 +33,11 @@ const (
 	DEFAULT_RECONNECT_INTERVAL = 2500 * time.Millisecond
 )
 
-type lbWorker interface {
-	close()
-	recv([][]byte) [][]byte
-	Run(func([]interface{}, map[string][]string, map[string]interface{}) []interface{})
-}
+// type LBWorker interface {
+// 	Close()
+// 	recv([][]byte) [][]byte
+// 	Run(func([]interface{}, map[string][]string, map[string]interface{}) []interface{})
+// }
 
 type Worker struct {
 	HydraServerAddr string `toml:"hydra_server_address"` // Hydra Load Balancer address
@@ -57,13 +58,13 @@ type Worker struct {
 	replyTo     []byte
 }
 
-func NewWorker(arguments []string) Worker {
-	worker := new(Worker)
+func NewWorker(arguments []string) (worker *Worker, err error) {
+	worker = new(Worker)
 
-	var err error
 	worker.context, err = zmq.NewContext()
 	if err != nil {
-		log.Fatal("Creating context failed")
+		err = errors.New("Creating context failed")
+		return
 	}
 	worker.HeartbeatInterval = DEFAULT_HEARTBEAT_INTERVAL
 	worker.PriorityLevel = DEFAULT_PRIORITY_LEVEL
@@ -71,23 +72,22 @@ func NewWorker(arguments []string) Worker {
 	worker.ReconnectInterval = DEFAULT_RECONNECT_INTERVAL
 	worker.Verbose = DEFAULT_VERBOSE
 
-	if err := worker.Load(arguments); err != nil {
-		log.Fatal("Loading configuration failed")
+	if err = worker.Load(arguments); err != nil {
+		err = errors.New("Loading configuration failed")
+		return
 	}
 
 	// Validate worker configuration
 	if !worker.isValid() {
-		log.Fatal("Invalid configuration: you must set all required configuration options")
+		err = errors.New("Invalid configuration: you must set all required configuration options")
+		return
 	}
 
-	worker.livenessCounter = worker.Liveness
-
-	// worker.reconnectToBroker()
-	worker.ConnectToBroker()
+	err = worker.ConnectToBroker()
 
 	runtime.SetFinalizer(worker, (*Worker).Close)
 
-	return worker
+	return
 }
 
 func (w *Worker) Close() {
@@ -174,9 +174,9 @@ func (w *Worker) ConnectToBroker() (err error) {
 	w.socket, err = w.context.NewSocket(zmq.DEALER)
 	// TODO: Maybe  set linger
 	// err = w.socket.SetLinger(0)
-	err = w.socket.Connect(w.broker)
-	if w.verbose {
-		log.Printf("I: connecting to broker at %s...\n", w.broker)
+	err = w.socket.Connect(w.HydraServerAddr)
+	if w.Verbose {
+		log.Printf("Connecting to broker at %s...\n", w.HydraServerAddr)
 	}
 	w.poller = zmq.NewPoller()
 	w.poller.Add(w.socket, zmq.POLLIN)
@@ -185,9 +185,10 @@ func (w *Worker) ConnectToBroker() (err error) {
 	w.sendToBroker(SIGNAL_READY, []byte(w.ServiceName), [][]byte{[]byte(strconv.Itoa(w.PriorityLevel))})
 
 	// If liveness hits zero, queue is considered disconnected
-	// TODO: Maybe
-	// w.liveness = heartbeat_liveness
+	w.livenessCounter = w.Liveness
 	w.heartbeatAt = time.Now().Add(w.HeartbeatInterval)
+
+	return
 }
 
 // sendToBroker dispatchs messages to hydra load balancer server (broker)
@@ -201,90 +202,6 @@ func (w *Worker) sendToBroker(command string, option []byte, msg [][]byte) (err 
 		log.Printf("Sending %X to broker\n", command)
 	}
 	_, err = w.socket.SendMessage(msg)
-	return
-}
-
-//  Send reply, if any, to broker and wait for next request.
-func (mdwrk *Mdwrk) Recv(reply []string) (msg []string, err error) {
-	//  Format and send the reply if we were provided one
-	if len(reply) == 0 && mdwrk.expect_reply {
-		panic("No reply, expected")
-	}
-	if len(reply) > 0 {
-		if mdwrk.reply_to == "" {
-			panic("mdwrk.reply_to == \"\"")
-		}
-		m := make([]string, 2, 2+len(reply))
-		m = append(m, reply...)
-		m[0] = mdwrk.reply_to
-		m[1] = ""
-		err = mdwrk.SendToBroker(MDPW_REPLY, "", m)
-	}
-	mdwrk.expect_reply = true
-
-	for {
-		var polled []zmq.Polled
-		polled, err = mdwrk.poller.Poll(mdwrk.heartbeat)
-		if err != nil {
-			break //  Interrupted
-		}
-
-		if len(polled) > 0 {
-			msg, err = mdwrk.worker.RecvMessage(0)
-			if err != nil {
-				break //  Interrupted
-			}
-			if mdwrk.verbose {
-				log.Printf("I: received message from broker: %q\n", msg)
-			}
-			mdwrk.liveness = heartbeat_liveness
-
-			//  Don't try to handle errors, just assert noisily
-			if len(msg) < 3 {
-				panic("len(msg) < 3")
-			}
-
-			if msg[0] != "" {
-				panic("msg[0] != \"\"")
-			}
-
-			if msg[1] != MDPW_WORKER {
-				panic("msg[1] != MDPW_WORKER")
-			}
-
-			command := msg[2]
-			msg = msg[3:]
-			switch command {
-			case MDPW_REQUEST:
-				//  We should pop and save as many addresses as there are
-				//  up to a null part, but for now, just save one...
-				mdwrk.reply_to, msg = unwrap(msg)
-				//  Here is where we actually have a message to process; we
-				//  return it to the caller application:
-				return //  We have a request to process
-			case MDPW_HEARTBEAT:
-				//  Do nothing for heartbeats
-			case MDPW_DISCONNECT:
-				mdwrk.ConnectToBroker()
-			default:
-				log.Printf("E: invalid input message %q\n", msg)
-			}
-		} else {
-			mdwrk.liveness--
-			if mdwrk.liveness == 0 {
-				if mdwrk.verbose {
-					log.Println("W: disconnected from broker - retrying...")
-				}
-				time.Sleep(mdwrk.reconnect)
-				mdwrk.ConnectToBroker()
-			}
-		}
-		//  Send HEARTBEAT if it's time
-		if time.Now().After(mdwrk.heartbeat_at) {
-			mdwrk.SendToBroker(MDPW_HEARTBEAT, "", []string{})
-			mdwrk.heartbeat_at = time.Now().Add(mdwrk.heartbeat)
-		}
-	}
 	return
 }
 
@@ -303,8 +220,9 @@ func (w *Worker) recv(reply [][]byte) (msg [][]byte) {
 		w.sendToBroker(SIGNAL_REPLY, nil, reply)
 	}
 
-	self.expectReply = true
+	w.expectReply = true
 
+	var err error
 	for {
 		var polled []zmq.Polled
 		polled, err = w.poller.Poll(w.HeartbeatInterval)
@@ -313,90 +231,45 @@ func (w *Worker) recv(reply [][]byte) (msg [][]byte) {
 		}
 
 		if len(polled) > 0 {
-			msg, err = w.socket.RecvMessage(0)
+			msg, err = w.socket.RecvMessageBytes(0)
 			if err != nil {
 				continue //  Interrupted
 			}
-			if mdwrk.verbose {
+			if w.Verbose {
 				log.Printf("Received message from broker: %q\n", msg)
 			}
-			// TODO: review
 			w.livenessCounter = w.Liveness
 
 			if len(msg) < 2 {
 				log.Fatal("Invalid message from broker") //  Interrupted
 			}
 
-			command := msg[2]
-			msg = msg[3:]
-			switch command {
-			case MDPW_REQUEST:
-				//  We should pop and save as many addresses as there are
-				//  up to a null part, but for now, just save one...
-				mdwrk.reply_to, msg = unwrap(msg)
-				//  Here is where we actually have a message to process; we
-				//  return it to the caller application:
-				return //  We have a request to process
-			case MDPW_HEARTBEAT:
-				//  Do nothing for heartbeats
-			case MDPW_DISCONNECT:
-				mdwrk.ConnectToBroker()
-			default:
-				log.Printf("E: invalid input message %q\n", msg)
-			}
-		}
-
-		/////////////////////////////////////////
-
-		items := zmq.PollItems{
-			zmq.PollItem{Socket: self.socket, Events: zmq.POLLIN},
-		}
-
-		_, err := zmq.Poll(items, self.HeartbeatInterval)
-		if err != nil {
-			panic(err) //  Interrupted
-		}
-
-		if item := items[0]; item.REvents&zmq.POLLIN != 0 {
-			msg, _ = self.socket.RecvMultipart(0)
-			if self.Verbose {
-				log.Println("Received message from broker")
-			}
-			self.livenessCounter = self.Liveness
-			if len(msg) < 2 {
-				panic("Invalid msg") //  Interrupted
-			}
-
 			switch command := string(msg[1]); command {
 			case SIGNAL_REQUEST:
-				// log.Println("SIGNAL_REQUEST")
 				//  We should pop and save as many addresses as there are
 				//  up to a null part, but for now, just save one...
-				self.replyTo = msg[2]
+				w.replyTo = msg[2]
 				msg = msg[4:6]
 				return
 			case SIGNAL_HEARTBEAT:
-				// log.Println("SIGNAL_HEARTBEAT")
-				// do nothin
+				// Do nothing for heartbeats
 			case SIGNAL_DISCONNECT:
-				// log.Println("SIGNAL_DISCONNECT")
-				self.reconnectToBroker()
+				w.ConnectToBroker()
 			default:
-				// TODO: catch error
-				log.Println("Invalid input message")
+				log.Println("Invalid input message %q\n", msg)
 			}
-		} else if self.livenessCounter--; self.livenessCounter <= 0 {
-			if self.Verbose {
+		} else if w.livenessCounter--; w.livenessCounter <= 0 {
+			if w.Verbose {
 				log.Println("Disconnected from broker - retrying...")
 			}
-			time.Sleep(self.ReconnectInterval)
-			self.reconnectToBroker()
+			time.Sleep(w.ReconnectInterval)
+			w.ConnectToBroker()
 		}
 
 		//  Send HEARTBEAT if it's time
-		if self.heartbeatAt.Before(time.Now()) {
-			self.sendToBroker(SIGNAL_HEARTBEAT, nil, nil)
-			self.heartbeatAt = time.Now().Add(self.HeartbeatInterval)
+		if w.heartbeatAt.Before(time.Now()) {
+			w.sendToBroker(SIGNAL_HEARTBEAT, nil, nil)
+			w.heartbeatAt = time.Now().Add(w.HeartbeatInterval)
 		}
 	}
 
@@ -404,9 +277,9 @@ func (w *Worker) recv(reply [][]byte) (msg [][]byte) {
 }
 
 // Run executes the worker permanently
-func (self *lbWorker) Run(fn func([]interface{}, map[string][]string, map[string]interface{}) []interface{}) {
+func (w *Worker) Run(fn func([]interface{}, map[string][]string, map[string]interface{}) []interface{}) {
 	for reply := [][]byte{}; ; {
-		request := self.recv(reply)
+		request := w.recv(reply)
 		if len(request) == 0 {
 			break
 		}
