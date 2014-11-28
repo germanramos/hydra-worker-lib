@@ -249,7 +249,7 @@ func (w *Worker) recv(reply [][]byte) (msg [][]byte) {
 				//  We should pop and save as many addresses as there are
 				//  up to a null part, but for now, just save one...
 				w.replyTo = msg[2]
-				msg = msg[4:6]
+				msg = msg[4:7]
 				return
 			case SIGNAL_HEARTBEAT:
 				// Do nothing for heartbeats
@@ -280,9 +280,11 @@ func (w *Worker) recv(reply [][]byte) (msg [][]byte) {
 func (w *Worker) Run(fn func([]interface{}, map[string][]string, map[string]interface{}) []interface{}) {
 	for reply := [][]byte{}; ; {
 		request := w.recv(reply)
-		if len(request) == 0 {
+		if len(request) < 3 {
+			log.Printf("Bad request %q received from broker\n", request)
 			break
 		}
+		log.Printf("Processing request: %q\n", request)
 		var instances []interface{}
 		if err := json.Unmarshal(request[0], &instances); err != nil {
 			log.Fatalln("Bad message: invalid instances")
@@ -322,6 +324,7 @@ func (w *Worker) Run(fn func([]interface{}, map[string][]string, map[string]inte
 		}
 		var tmpInstances []interface{}
 		computedInstances := processInstances(instances, &tmpInstances, 0)
+		log.Printf("Computed instances: %q\n", computedInstances)
 
 		instancesResult, _ := json.Marshal(computedInstances)
 		reply = [][]byte{instancesResult}
